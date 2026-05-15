@@ -4,20 +4,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Bootstrapped. The binary parses a TOML config, opens a recursive `notify`
-watcher per configured directory, and logs events to stderr. Command
-execution and token substitution (`{FILE}` / `{PATH}` / `{EVENT}` /
-`{TIMESTAMP}`) are **not yet implemented** — that is the next vertical slice
-and is testable in isolation; do it red/green.
+Functional. The binary watches configured directories recursively, classifies
+create / modify / delete events, runs the directory's configured shell
+command with `{FILE}` / `{PATH}` / `{EVENT}` / `{TIMESTAMP}` substitution,
+and reaps spawned children in dedicated threads. Configured paths are
+`canonicalize()`'d at startup so symlink-ridden macOS tmp paths
+(`/var` → `/private/var`) line up with the watcher's event paths.
+
+Open work: debouncing bursty events (bead `obsidian-watch-yc4`) and proper
+rename-as-delete-plus-create split (bead filed as a follow-up to f95).
 
 ## Layout
 
-- `src/main.rs` — CLI parsing (clap), wiring, and the event loop.
+- `src/main.rs` — CLI parsing, watcher setup, event loop, child reaping.
 - `src/config.rs` — `Config` / `DirectoryConfig` structs and TOML loading
-  (with unit tests).
-- `SPEC.md` — design intent. Authoritative when it disagrees with `main.rs`
-  (in practice, expect this when implementing features the binary doesn't do
-  yet).
+  (unit-tested).
+- `src/executor.rs` — token substitution, event classification, command
+  spawning, helpers (`basename`, `now_rfc3339`, `find_command`). The
+  pure-function parts have heavy unit coverage; `render_and_spawn` is
+  covered by a synchronous shell-exec test.
+- `SPEC.md` — design intent. Authoritative when it disagrees with the code;
+  flag the disagreement and reconcile in the same commit.
 
 ## Language
 
