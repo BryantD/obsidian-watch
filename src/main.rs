@@ -4,9 +4,13 @@ mod executor;
 use anyhow::{Context, Result};
 use clap::Parser;
 use config::Config;
-use notify::{Event, RecursiveMode, Watcher};
+use notify::{Event, RecursiveMode};
+use notify_debouncer_full::new_debouncer;
 use std::path::PathBuf;
 use std::sync::mpsc;
+use std::time::Duration;
+
+const DEBOUNCE_WINDOW: Duration = Duration::from_secs(15);
 
 #[derive(Parser)]
 #[command(
@@ -32,19 +36,32 @@ fn main() -> Result<()> {
     }
 
     let (tx, rx) = mpsc::channel();
-    let mut watcher = notify::recommended_watcher(tx)?;
+    let mut debouncer = new_debouncer(DEBOUNCE_WINDOW, None, tx)?;
 
     for (canonical, command) in &directories {
-        watcher
+        debouncer
             .watch(canonical, RecursiveMode::Recursive)
             .with_context(|| format!("watching {}", canonical.display()))?;
-        eprintln!("watching {} (command: {})", canonical.display(), command);
+        eprintln!(
+            "watching {} (command: {}, debounce: {:?})",
+            canonical.display(),
+            command,
+            DEBOUNCE_WINDOW
+        );
     }
 
     for result in rx {
         match result {
-            Ok(event) => handle_event(&event, &directories),
-            Err(e) => eprintln!("watch error: {e}"),
+            Ok(events) => {
+                for debounced in events {
+                    handle_event(&debounced.event, &directories);
+                }
+            }
+            Err(errors) => {
+                for e in errors {
+                    eprintln!("watch error: {e}");
+                }
+            }
         }
     }
 

@@ -6,10 +6,10 @@ command whenever notes are created, modified, or deleted.
 ## Status
 
 Early but functional. The binary watches the configured directories
-recursively and runs the configured shell command on file create / modify /
-delete events with `{FILE}` / `{PATH}` / `{EVENT}` / `{TIMESTAMP}`
-substitution. Debouncing of bursty events (e.g. editor save dances) is not
-yet implemented — expect duplicate invocations during rapid writes. See
+recursively, debounces bursty filesystem activity over a fixed 15-second
+window, and runs the configured shell command per coalesced event with
+`{FILE}` / `{PATH}` / `{EVENT}` / `{TIMESTAMP}` substitution. The long
+debounce is deliberate — this tool is not intended to be realtime. See
 [`SPEC.md`](SPEC.md) for the full design and platform caveats.
 
 ## Build
