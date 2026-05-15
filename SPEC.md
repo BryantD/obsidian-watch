@@ -48,9 +48,11 @@ generates these during normal operation and they don't represent note edits.
 - **Rename detection.** Linux `inotify` produces paired
   `MOVED_FROM` / `MOVED_TO` events with a cookie; macOS `FSEvents` typically
   surfaces this as separate remove + create. The `notify` crate flattens this
-  inconsistently. For now we treat all renames as a remove on the old path
-  plus a create on the new one; the configured command receives two
-  invocations, not one paired rename event.
+  inconsistently. **In v1 we surface all rename events as `modify`** rather
+  than splitting them into delete-of-old + create-of-new, because the latter
+  requires per-path event classification and careful handling of
+  `RenameMode::Both`. Splitting renames into delete + create is tracked as a
+  follow-up bead.
 - **Coalescing.** macOS coalesces rapid changes; Linux does not. Event
   ordering is best-effort, not guaranteed identical across platforms.
 - **Editor save dance.** Obsidian (like many editors) saves by writing to a

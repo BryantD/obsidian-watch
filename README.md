@@ -5,10 +5,12 @@ command whenever notes are created, modified, or deleted.
 
 ## Status
 
-Early. The binary builds, parses a config, and logs filesystem events for
-each watched directory. **Command execution and `{FILE}`/`{PATH}`/`{EVENT}`/
-`{TIMESTAMP}` substitution are not implemented yet.** See [`SPEC.md`](SPEC.md)
-for the full design.
+Early but functional. The binary watches the configured directories
+recursively and runs the configured shell command on file create / modify /
+delete events with `{FILE}` / `{PATH}` / `{EVENT}` / `{TIMESTAMP}`
+substitution. Debouncing of bursty events (e.g. editor save dances) is not
+yet implemented — expect duplicate invocations during rapid writes. See
+[`SPEC.md`](SPEC.md) for the full design and platform caveats.
 
 ## Build
 

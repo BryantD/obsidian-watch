@@ -1,0 +1,2 @@
+{"id":"int-0cab3218","kind":"field_change","created_at":"2026-05-15T17:40:54.758729Z","actor":"BryantD","issue_id":"obsidian-watch-f95","extra":{"field":"status","new_value":"in_progress","old_value":"open"}}
+{"id":"int-41bb12c7","kind":"field_change","created_at":"2026-05-15T17:56:00.367298Z","actor":"BryantD","issue_id":"obsidian-watch-f95","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"completed"}}
