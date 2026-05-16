@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
 use notify::EventKind;
-use notify::event::ModifyKind;
+use notify::event::{Event, ModifyKind, RenameMode};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
@@ -9,25 +9,99 @@ use std::process::{Child, Command};
 pub struct EventContext<'a> {
     pub file: &'a str,
     pub path: &'a str,
+    pub old_file: &'a str,
+    pub old_path: &'a str,
     pub event: &'a str,
     pub timestamp: &'a str,
+}
+
+#[derive(Debug)]
+pub struct Classification<'a> {
+    pub path: &'a Path,
+    pub old_path: Option<&'a Path>,
+    pub event: &'static str,
 }
 
 pub fn substitute(template: &str, ctx: &EventContext) -> String {
     template
         .replace("{FILE}", ctx.file)
         .replace("{PATH}", ctx.path)
+        .replace("{OLD_FILE}", ctx.old_file)
+        .replace("{OLD_PATH}", ctx.old_path)
         .replace("{EVENT}", ctx.event)
         .replace("{TIMESTAMP}", ctx.timestamp)
 }
 
-pub fn classify_event(kind: &EventKind) -> Option<&'static str> {
-    match kind {
-        EventKind::Create(_) => Some("create"),
-        EventKind::Remove(_) => Some("delete"),
-        EventKind::Modify(ModifyKind::Metadata(_)) => None,
-        EventKind::Modify(_) => Some("modify"),
-        _ => None,
+pub fn classify_event(event: &Event) -> Vec<Classification<'_>> {
+    match &event.kind {
+        EventKind::Create(_) => event
+            .paths
+            .iter()
+            .map(|p| Classification {
+                path: p.as_path(),
+                old_path: None,
+                event: "create",
+            })
+            .collect(),
+        EventKind::Remove(_) => event
+            .paths
+            .iter()
+            .map(|p| Classification {
+                path: p.as_path(),
+                old_path: None,
+                event: "delete",
+            })
+            .collect(),
+        EventKind::Modify(ModifyKind::Metadata(_)) => Vec::new(),
+        EventKind::Modify(ModifyKind::Name(RenameMode::From)) => event
+            .paths
+            .iter()
+            .map(|p| Classification {
+                path: p.as_path(),
+                old_path: None,
+                event: "delete",
+            })
+            .collect(),
+        EventKind::Modify(ModifyKind::Name(RenameMode::To)) => event
+            .paths
+            .iter()
+            .map(|p| Classification {
+                path: p.as_path(),
+                old_path: None,
+                event: "create",
+            })
+            .collect(),
+        EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => {
+            // notify pairs RenameMode::Both as [from, to]. Anything else is malformed;
+            // fall back to a single 'modify' on each path so we don't drop the event.
+            if event.paths.len() == 2 {
+                vec![Classification {
+                    path: event.paths[1].as_path(),
+                    old_path: Some(event.paths[0].as_path()),
+                    event: "rename",
+                }]
+            } else {
+                event
+                    .paths
+                    .iter()
+                    .map(|p| Classification {
+                        path: p.as_path(),
+                        old_path: None,
+                        event: "modify",
+                    })
+                    .collect()
+            }
+        }
+        EventKind::Modify(_) => event
+            .paths
+            .iter()
+            .map(|p| Classification {
+                path: p.as_path(),
+                old_path: None,
+                event: "modify",
+            })
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -57,14 +131,26 @@ pub fn find_command<'a>(path: &Path, dirs: &'a [(PathBuf, String)]) -> Option<&'
 #[cfg(test)]
 mod tests {
     use super::*;
-    use notify::event::{CreateKind, DataChange, MetadataKind, ModifyKind, RemoveKind, RenameMode};
+    use notify::event::{
+        CreateKind, DataChange, EventAttributes, MetadataKind, ModifyKind, RemoveKind, RenameMode,
+    };
 
     fn ctx() -> EventContext<'static> {
         EventContext {
             file: "note.md",
             path: "/notes/note.md",
+            old_file: "",
+            old_path: "",
             event: "modify",
             timestamp: "2026-05-15T10:00:00Z",
+        }
+    }
+
+    fn make_event(kind: EventKind, paths: Vec<&str>) -> Event {
+        Event {
+            kind,
+            paths: paths.into_iter().map(PathBuf::from).collect(),
+            attrs: EventAttributes::new(),
         }
     }
 
@@ -78,6 +164,26 @@ mod tests {
     }
 
     #[test]
+    fn substitutes_old_tokens_for_rename() {
+        let c = EventContext {
+            file: "bar.md",
+            path: "/notes/bar.md",
+            old_file: "foo.md",
+            old_path: "/notes/foo.md",
+            event: "rename",
+            timestamp: "2026-05-15T10:00:00Z",
+        };
+        let out = substitute("{EVENT}: {OLD_FILE} -> {FILE}", &c);
+        assert_eq!(out, "rename: foo.md -> bar.md");
+    }
+
+    #[test]
+    fn substitutes_old_path_empty_for_non_rename() {
+        let out = substitute("{EVENT} {FILE} (was: {OLD_FILE})", &ctx());
+        assert_eq!(out, "modify note.md (was: )");
+    }
+
+    #[test]
     fn leaves_unknown_braces_alone() {
         let out = substitute("{UNKNOWN} {FILE}", &ctx());
         assert_eq!(out, "{UNKNOWN} note.md");
@@ -88,6 +194,8 @@ mod tests {
         let c = EventContext {
             file: "my note.md",
             path: "/notes/my note.md",
+            old_file: "",
+            old_path: "",
             event: "create",
             timestamp: "2026-05-15T10:00:00Z",
         };
@@ -97,36 +205,94 @@ mod tests {
 
     #[test]
     fn classifies_create() {
-        assert_eq!(
-            classify_event(&EventKind::Create(CreateKind::File)),
-            Some("create")
-        );
+        let e = make_event(EventKind::Create(CreateKind::File), vec!["/a/x.md"]);
+        let out = classify_event(&e);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].path, Path::new("/a/x.md"));
+        assert_eq!(out[0].event, "create");
+        assert!(out[0].old_path.is_none());
     }
 
     #[test]
     fn classifies_remove_as_delete() {
-        assert_eq!(
-            classify_event(&EventKind::Remove(RemoveKind::File)),
-            Some("delete")
-        );
+        let e = make_event(EventKind::Remove(RemoveKind::File), vec!["/a/x.md"]);
+        let out = classify_event(&e);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].event, "delete");
     }
 
     #[test]
     fn classifies_data_modify_as_modify() {
-        let kind = EventKind::Modify(ModifyKind::Data(DataChange::Content));
-        assert_eq!(classify_event(&kind), Some("modify"));
+        let e = make_event(
+            EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+            vec!["/a/x.md"],
+        );
+        let out = classify_event(&e);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].event, "modify");
+        assert!(out[0].old_path.is_none());
     }
 
     #[test]
-    fn classifies_rename_as_modify() {
-        let kind = EventKind::Modify(ModifyKind::Name(RenameMode::Both));
-        assert_eq!(classify_event(&kind), Some("modify"));
+    fn classifies_rename_from_as_delete() {
+        let e = make_event(
+            EventKind::Modify(ModifyKind::Name(RenameMode::From)),
+            vec!["/a/x.md"],
+        );
+        let out = classify_event(&e);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].path, Path::new("/a/x.md"));
+        assert_eq!(out[0].event, "delete");
+        assert!(out[0].old_path.is_none());
+    }
+
+    #[test]
+    fn classifies_rename_to_as_create() {
+        let e = make_event(
+            EventKind::Modify(ModifyKind::Name(RenameMode::To)),
+            vec!["/a/y.md"],
+        );
+        let out = classify_event(&e);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].path, Path::new("/a/y.md"));
+        assert_eq!(out[0].event, "create");
+        assert!(out[0].old_path.is_none());
+    }
+
+    #[test]
+    fn classifies_rename_both_as_single_rename_event() {
+        let e = make_event(
+            EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+            vec!["/a/x.md", "/a/y.md"],
+        );
+        let out = classify_event(&e);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].path, Path::new("/a/y.md"));
+        assert_eq!(out[0].old_path, Some(Path::new("/a/x.md")));
+        assert_eq!(out[0].event, "rename");
+    }
+
+    #[test]
+    fn classifies_rename_both_with_malformed_paths_falls_back_to_modify() {
+        // notify is supposed to give us [from, to] for RenameMode::Both. If for any
+        // reason we get a different shape, fall back to firing 'modify' rather than
+        // panicking or dropping the event.
+        let e = make_event(
+            EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+            vec!["/a/x.md"],
+        );
+        let out = classify_event(&e);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].event, "modify");
     }
 
     #[test]
     fn ignores_metadata_modify() {
-        let kind = EventKind::Modify(ModifyKind::Metadata(MetadataKind::Permissions));
-        assert_eq!(classify_event(&kind), None);
+        let e = make_event(
+            EventKind::Modify(ModifyKind::Metadata(MetadataKind::Permissions)),
+            vec!["/a/x.md"],
+        );
+        assert!(classify_event(&e).is_empty());
     }
 
     #[test]
@@ -148,6 +314,8 @@ mod tests {
         let c = EventContext {
             file: "alpha.md",
             path: "/n/alpha.md",
+            old_file: "",
+            old_path: "",
             event: "create",
             timestamp: "2026-05-15T10:00:00Z",
         };
