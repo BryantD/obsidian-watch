@@ -4,15 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Functional. The binary watches configured directories recursively, classifies
-create / modify / delete events, runs the directory's configured shell
-command with `{FILE}` / `{PATH}` / `{EVENT}` / `{TIMESTAMP}` substitution,
-and reaps spawned children in dedicated threads. Configured paths are
-`canonicalize()`'d at startup so symlink-ridden macOS tmp paths
-(`/var` → `/private/var`) line up with the watcher's event paths.
+Functional. The binary watches configured directories recursively,
+**debounces events through a fixed 15-second window** (via
+`notify-debouncer-full`), classifies create / modify / delete events, runs
+the directory's configured shell command with `{FILE}` / `{PATH}` /
+`{EVENT}` / `{TIMESTAMP}` substitution, and reaps spawned children in
+dedicated threads. Configured paths are `canonicalize()`'d at startup so
+symlink-ridden macOS tmp paths (`/var` → `/private/var`) line up with the
+watcher's event paths.
 
-Open work: debouncing bursty events (bead `obsidian-watch-yc4`) and proper
-rename-as-delete-plus-create split (bead filed as a follow-up to f95).
+The 15s window is hardcoded in `DEBOUNCE_WINDOW` in `main.rs` — do not add
+config plumbing for it without explicit user direction. This tool is
+deliberately not realtime.
+
+Open work: proper rename-as-delete-plus-create split (bead
+`obsidian-watch-sx8`).
 
 ## Layout
 

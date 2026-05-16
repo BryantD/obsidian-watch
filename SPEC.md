@@ -89,9 +89,21 @@ Substitution tokens in `command`:
 The `path` field is required so the config block name (`notes`) can be a
 friendly label independent of the filesystem path.
 
+# Debouncing
+
+Events are coalesced through the `notify-debouncer-full` crate with a fixed
+**15-second** quiet window. The window is deliberately long: this tool is
+not realtime, and the typical use case (running a sync / index / backup
+command after a note edit) tolerates seconds of latency in exchange for
+collapsing a multi-event editor save into one command invocation. The
+debouncer also drops "delete-then-create-same-path" sequences (interpreted
+as a single modify-equivalent change).
+
+The window is hardcoded; making it configurable is out of scope for now.
+
 # Out of scope (for v1)
 
-- Debouncing / coalescing of bursty events beyond what the backend does.
+- A configurable debounce window (intentionally hardcoded at 15s).
 - Filtering by glob or filename pattern (everything in the watched directory
   triggers the command).
 - Concurrency limits on spawned commands.
