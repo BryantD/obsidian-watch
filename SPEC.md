@@ -36,23 +36,32 @@ Expressed in `notify` crate vocabulary, not raw inotify masks:
 
 | Logical event | `notify::EventKind` variants                                    |
 |---------------|-----------------------------------------------------------------|
-| create        | `Create(_)` (any subkind)                                       |
-| modify        | `Modify(Data(_))` (content), `Modify(Name(_))` (rename)         |
-| delete        | `Remove(_)`                                                     |
+| create        | `Create(_)` (any subkind), `Modify(Name(RenameMode::To))`       |
+| modify        | `Modify(Data(_))`                                               |
+| delete        | `Remove(_)`, `Modify(Name(RenameMode::From))`                   |
+| rename        | `Modify(Name(RenameMode::Both))`                                |
 
 `Modify(Metadata(_))` (permissions, timestamps) is **ignored** — Obsidian
 generates these during normal operation and they don't represent note edits.
 
+A `rename` event fires once with `{PATH}` / `{FILE}` set to the new name
+and `{OLD_PATH}` / `{OLD_FILE}` set to the old name. The rationale for one
+event (rather than splitting into `delete` of the old path plus `create` of
+the new path) is that a downstream consumer can't otherwise distinguish a
+rename from an unrelated delete-and-create pair within the debounce window;
+the `rename` verb is itself information.
+
 ### Platform behavior caveats
 
 - **Rename detection.** Linux `inotify` produces paired
-  `MOVED_FROM` / `MOVED_TO` events with a cookie; macOS `FSEvents` typically
-  surfaces this as separate remove + create. The `notify` crate flattens this
-  inconsistently. **In v1 we surface all rename events as `modify`** rather
-  than splitting them into delete-of-old + create-of-new, because the latter
-  requires per-path event classification and careful handling of
-  `RenameMode::Both`. Splitting renames into delete + create is tracked as a
-  follow-up bead.
+  `MOVED_FROM` / `MOVED_TO` events with a cookie, which `notify` surfaces as
+  `RenameMode::Both` with `paths = [from, to]` — this is the case that
+  produces a `rename` event. macOS `FSEvents` typically surfaces a rename as
+  separate `Remove` + `Create`, which we emit as `delete` and `create`
+  (information about the rename pairing is unavailable from the backend).
+  When the backend only delivers one half of a rename (`RenameMode::From`
+  without a matching `To`, or vice versa) we fall back to `delete` /
+  `create` respectively.
 - **Coalescing.** macOS coalesces rapid changes; Linux does not. Event
   ordering is best-effort, not guaranteed identical across platforms.
 - **Editor save dance.** Obsidian (like many editors) saves by writing to a
@@ -83,8 +92,14 @@ Substitution tokens in `command`:
 |---------------|--------------------------------------------------------------|
 | `{FILE}`      | The file's basename (e.g. `2026-05-15.md`)                   |
 | `{PATH}`      | The file's absolute path                                     |
-| `{EVENT}`     | `create`, `modify`, or `delete`                              |
+| `{OLD_FILE}`  | Previous basename on `rename` events; empty string otherwise |
+| `{OLD_PATH}`  | Previous absolute path on `rename` events; empty otherwise   |
+| `{EVENT}`     | `create`, `modify`, `delete`, or `rename`                    |
 | `{TIMESTAMP}` | Event time, RFC 3339 UTC (e.g. `2026-05-15T13:42:07Z`)       |
+
+For non-rename events `{OLD_FILE}` and `{OLD_PATH}` expand to the empty
+string. Quote them in your command (`--old-path "{OLD_PATH}"`) so the
+shell receives an empty argument rather than dropping the flag's value.
 
 The `path` field is required so the config block name (`notes`) can be a
 friendly label independent of the filesystem path.

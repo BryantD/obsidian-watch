@@ -69,20 +69,28 @@ fn main() -> Result<()> {
 }
 
 fn handle_event(event: &Event, dirs: &[(PathBuf, String)]) {
-    let Some(event_kind) = executor::classify_event(&event.kind) else {
+    let classifications = executor::classify_event(event);
+    if classifications.is_empty() {
         return;
-    };
+    }
     let timestamp = executor::now_rfc3339();
 
-    for path in &event.paths {
-        let Some(template) = executor::find_command(path, dirs) else {
+    for c in classifications {
+        let Some(template) = executor::find_command(c.path, dirs) else {
             continue;
         };
-        let path_str = path.display().to_string();
+        let path_str = c.path.display().to_string();
+        let old_path_str = c
+            .old_path
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        let old_file = c.old_path.map(executor::basename).unwrap_or("");
         let ctx = executor::EventContext {
-            file: executor::basename(path),
+            file: executor::basename(c.path),
             path: &path_str,
-            event: event_kind,
+            old_file,
+            old_path: &old_path_str,
+            event: c.event,
             timestamp: &timestamp,
         };
         match executor::render_and_spawn(template, &ctx) {
